@@ -1,3 +1,5 @@
+# texto a habla.py
+
 from gtts import gTTS
 import os
 import pygame
@@ -21,5 +23,6 @@ def text_to_speech(text):
     os.remove(filename)
 
 if __name__ == "__main__":
-    text = "texto"
+
+    text = "AUDIO DEL TEXTO"
     text_to_speech(text)
