@@ -131,7 +131,7 @@ def evaluate_model(model, threshold=0.7):
                 cv2.putText(image, sentence[0], (10, image.shape[0] - 10), FONT, FONT_SIZE, (0, 0, 0))
             
             # Dibujar keypoints en la imagen
-            # draw_keypoints(image, results)
+            draw_keypoints(image, results)
             
             cv2.imshow('Traductor', image)  # Mostrar imagen en ventana llamada 'Traductor'
             

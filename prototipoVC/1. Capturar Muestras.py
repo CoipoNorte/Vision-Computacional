@@ -9,7 +9,7 @@ from mediapipe.python.solutions.holistic import FACEMESH_CONTOURS, POSE_CONNECTI
 from mediapipe.python.solutions.drawing_utils import draw_landmarks, DrawingSpec
 from typing import NamedTuple
 
-PALABRA = "yo"
+PALABRA = "hola"
 # Definir el código de color ANSI para azul claro
 LIGHT_BLUE = '\033[94m'
 RESET = '\033[0m'
