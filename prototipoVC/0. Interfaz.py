@@ -1,70 +1,121 @@
-import tkinter as tk
-from tkinter import ttk
-import subprocess  # Módulo para ejecutar procesos externos
+import os
+import cv2
+import numpy as np
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QLabel)
+from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QImage, QPixmap
+from tensorflow.keras.models import load_model
+from mediapipe.python.solutions.holistic import Holistic
+from mediapipe.python.solutions.drawing_utils import draw_landmarks
+from text_to_speech import text_to_speech
 
-class ProyectoGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Traductor LSCH - Prototipo VC")
-        self.root.geometry("600x400")  # Tamaño inicial de la ventana
-        self.root.configure(bg='#0071D5')  # Color de fondo azul para la ventana
+# Parámetros y configuraciones
+MAX_LENGTH_FRAMES = 15
+MIN_LENGTH_FRAMES = 5
+ROOT_PATH = os.getcwd()
+DATA_PATH = os.path.join(ROOT_PATH, "data")
+MODELS_PATH = os.path.join(ROOT_PATH, "models")
+MODEL_NAME = f"actions_{MAX_LENGTH_FRAMES}.keras"
+FONT = cv2.FONT_HERSHEY_PLAIN
+FONT_SIZE = 1.5
 
-        # Marco para la entrada de texto
-        self.text_entry_frame = tk.Frame(self.root, bg='#0071D5')
-        self.text_entry_frame.pack(pady=30)
+def mediapipe_detection(image, model):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image.flags.writeable = False
+    results = model.process(image)
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    return image, results
 
-        # Etiqueta y entrada de texto
-        self.descripcion = tk.Label(self.text_entry_frame, text="Ingrese una nueva palabra:", font=('Arial', 12), bg='#0071D5', fg='white')
-        self.descripcion.grid(row=0, column=0, padx=10, pady=10)
+def there_hand(results):
+    return results.left_hand_landmarks or results.right_hand_landmarks
 
-        self.palabra_ingresada = tk.Entry(self.text_entry_frame, font=('Arial', 12), bg='white', fg='black', bd=2, relief=tk.FLAT)
-        self.palabra_ingresada.grid(row=1, column=0, padx=10, pady=10, ipadx=10, ipady=5, sticky='ew')  # Ajustar el espacio de texto
+def extract_keypoints(results):
+    pose = np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33 * 4)
+    face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]).flatten() if results.face_landmarks else np.zeros(468 * 3)
+    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21 * 3)
+    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21 * 3)
+    return np.concatenate([pose, face, lh, rh])
 
-        # Marco para los botones
-        self.botones_frame = tk.Frame(self.root, bg='#0071D5')
-        self.botones_frame.pack(pady=20)
+def get_actions(path):
+    out = []
+    for action in os.listdir(path):
+        name, ext = os.path.splitext(action)
+        if ext == ".h5":
+            out.append(name)
+    return out
 
-        # Botones
-        self.btn_capturar = tk.Button(self.botones_frame, text='Capturar Muestras', command=self.capturar, font=('Arial', 12),
-                                      bg='#0085FC', fg='white', bd=2, relief=tk.FLAT, width=20, padx=10, pady=5,
-                                      cursor='hand2')
-        self.btn_capturar.grid(row=0, column=0, padx=10, pady=10)
+class EvaluarModeloApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+        self.model = load_model(os.path.join(MODELS_PATH, MODEL_NAME))
+        self.holistic_model = Holistic()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_frame)
+        self.video_capture = cv2.VideoCapture(0)
+        self.kp_sequence = []
+        self.sentence = []
+        self.count_frame = 0
 
-        self.btn_puntos = tk.Button(self.botones_frame, text='Crear Puntos\nCaracterísticos', command=self.crear_puntos, font=('Arial', 12),
-                                    bg='#33A64C', fg='white', bd=2, relief=tk.FLAT, width=20, padx=10, pady=5,
-                                    cursor='hand2')
-        self.btn_puntos.grid(row=0, column=1, padx=10, pady=10)
+    def initUI(self):
+        self.setWindowTitle('Traductor LSCH - Prototipo VC')
+        self.setGeometry(100, 100, 800, 600)
+        
+        self.layout = QVBoxLayout()
+        
+        self.label = QLabel(self)
+        self.layout.addWidget(self.label)
+        
+        self.translation_label = QLabel("Traducción: ", self)
+        self.translation_label.setStyleSheet("font-size: 16px; color: black; background-color: white; padding: 10px; border-radius: 10px;")
+        self.layout.addWidget(self.translation_label)
+        
+        self.btn_evaluar = QPushButton('Evaluar Modelo', self)
+        self.btn_evaluar.setStyleSheet("background-color: #1CA5B8; color: white; border-radius: 10px; padding: 10px;")
+        self.btn_evaluar.clicked.connect(self.start_evaluation)
+        self.layout.addWidget(self.btn_evaluar)
+        
+        self.setLayout(self.layout)
 
-        self.btn_entrenar = tk.Button(self.botones_frame, text='Entrenar Modelo', command=self.entrenar, font=('Arial', 12),
-                                      bg='#FFBC26', fg='white', bd=2, relief=tk.FLAT, width=20, padx=10, pady=5,
-                                      cursor='hand2')
-        self.btn_entrenar.grid(row=1, column=0, padx=10, pady=10)
+    def start_evaluation(self):
+        self.timer.start(30)
 
-        self.btn_evaluar = tk.Button(self.botones_frame, text='Evaluar Modelo', command=self.evaluar, font=('Arial', 12),
-                                     bg='#1CA5B8', fg='white', bd=2, relief=tk.FLAT, width=20, padx=10, pady=5,
-                                     cursor='hand2')
-        self.btn_evaluar.grid(row=1, column=1, padx=10, pady=10)
+    def update_frame(self):
+        ret, frame = self.video_capture.read()
+        if not ret:
+            return
+        
+        image, results = mediapipe_detection(frame, self.holistic_model)
+        self.kp_sequence.append(extract_keypoints(results))
 
-    def capturar(self):
-        palabra = self.palabra_ingresada.get()
-        subprocess.run(["python", "1. Capturar Muestras.py", palabra])
+        if len(self.kp_sequence) > MAX_LENGTH_FRAMES and there_hand(results):
+            self.count_frame += 1
+        else:
+            if self.count_frame >= MIN_LENGTH_FRAMES:
+                res = self.model.predict(np.expand_dims(self.kp_sequence[-MAX_LENGTH_FRAMES:], axis=0))[0]
+                if res[np.argmax(res)] > 0.7:
+                    sent = get_actions(DATA_PATH)[np.argmax(res)]
+                    self.sentence.insert(0, sent)
+                    self.translation_label.setText(f"Traducción: {sent}")
+                    text_to_speech(sent)
+                self.count_frame = 0
+                self.kp_sequence = []
 
-    def crear_puntos(self):
-        # Ejecutar el script 2. Crear Puntos Caracteristicos.py
-        subprocess.run(["python", "2. Crear Puntos Caracteristicos.py"])
+        if self.sentence:
+            cv2.putText(image, self.sentence[0], (10, image.shape[0] - 10), FONT, FONT_SIZE, (0, 0, 0), 2)
 
-    def entrenar(self):
-        # Ejecutar el script 3. Entrenar Modelo.py
-        subprocess.run(["python", "3. Entrenar Modelo.py"])
+        qimage = QImage(image.data, image.shape[1], image.shape[0], QImage.Format_BGR888)
+        self.label.setPixmap(QPixmap.fromImage(qimage))
 
-    def evaluar(self):
-        # Ejecutar el script 4. Evaluar Modelo.py
-        subprocess.run(["python", "4. Evaluar Modelo.py"])
-
-    def start(self):
-        self.root.mainloop()
+    def closeEvent(self, event):
+        self.timer.stop()
+        self.video_capture.release()
+        cv2.destroyAllWindows()
+        event.accept()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = ProyectoGUI(root)
-    app.start()
+    app = QApplication([])
+    window = EvaluarModeloApp()
+    window.show()
+    app.exec_()
